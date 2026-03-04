@@ -1,34 +1,81 @@
-"""OpenVFS 主客户端"""
+"""OpenVFS 主客户端（纯虚拟文件系统能力）。"""
 
 from __future__ import annotations
 
-from typing import Any
-
 from openvfs.config import load_config
+from openvfs.document import VFSFile
+from openvfs.folder import VFSFolder
 from openvfs.exceptions import NotFoundError
-from openvfs.markdown.editor import (
-    add_heading as _add_heading,
-    add_heading_with_content as _add_heading_with_content,
-    append_content as _append_content,
-    insert_under_heading as _insert_under_heading,
-    replace_heading_content as _replace_heading_content,
-    get_section as _get_section,
-    set_section_by_field as _set_section_by_field,
-    set_section_by_id as _set_section_by_id,
-    get_section_by_field as _get_section_by_field,
-    get_section_by_id as _get_section_by_id,
-    get_section_by_ref as _get_section_by_ref,
-    get_heading_with_context as _get_heading_with_context,
-    list_sections_by_field as _list_sections_by_field,
-)
-from openvfs.markdown.parser import get_headings as _get_headings
 from openvfs.storage.tos import TOSStorage
-from openvfs.uri import parse, to_object_key, ensure_md, is_file_uri
-from openvfs.chain import DocChain
+from openvfs.uri import SCHEME, parse, to_object_key
 
 
-class MindMarkClient:
-    """OpenVFS 客户端，提供 CRUD 及 Markdown 格式操作。"""
+class Path:
+    """路径句柄：在指定路径下执行文件管理操作。"""
+
+    def __init__(self, client: "Client", path_parts: list[str]) -> None:
+        self._client = client
+        self._path_parts = [p for p in path_parts if p]
+
+    def _file_uri(self, name: str) -> str:
+        path = "/".join(self._path_parts)
+        name = name.strip().lstrip("/")
+        if not name:
+            raise ValueError("文件名不能为空")
+        full = f"{path}/{name}" if path else name
+        return f"{SCHEME}://{full}"
+
+    def _dir_uri(self) -> str:
+        path = "/".join(self._path_parts)
+        return f"{SCHEME}://{path}/" if path else f"{SCHEME}://"
+
+    def _folder_uri(self, name: str) -> str:
+        name = name.strip().strip("/")
+        if not name:
+            raise ValueError("文件夹名不能为空")
+        path = "/".join(self._path_parts)
+        full = f"{path}/{name}" if path else name
+        return f"{SCHEME}://{full}"
+
+    def create_file(self, name: str, content: str) -> None:
+        """创建文件。"""
+        self._client.create_file(self._file_uri(name), content)
+
+    def create_folder(self, name: str) -> None:
+        """创建文件夹。"""
+        self._client.create_folder(self._folder_uri(name))
+
+    def find_file(self, name: str) -> VFSFile:
+        """查找文件并返回文件对象。"""
+        return self._client.find_file(self._file_uri(name))
+
+    def find_folder(self, name: str) -> VFSFolder:
+        """查找文件夹并返回文件夹对象。"""
+        return self._client.find_folder(self._folder_uri(name))
+
+    def update_file(self, name: str, content: str) -> None:
+        """全量更新文件内容。"""
+        self._client.update_file(self._file_uri(name), content)
+
+    def delete(self, name: str) -> None:
+        """删除文件。"""
+        self._client.delete(self._file_uri(name))
+
+    def exists_file(self, name: str) -> bool:
+        """检查文件是否存在。"""
+        return self._client.exists_file(self._file_uri(name))
+
+    def exists_folder(self, name: str) -> bool:
+        """检查文件夹是否存在。"""
+        return self._client.exists_folder(self._folder_uri(name))
+
+    def list(self) -> list[str]:
+        """列举当前路径下子项（文件或子目录），目录以 / 结尾。"""
+        return self._client.list(self._dir_uri())
+
+
+class Client:
+    """OpenVFS 客户端，提供通用文件管理接口。"""
 
     def __init__(
         self,
@@ -51,62 +98,108 @@ class MindMarkClient:
         )
         self._namespaces = namespaces if namespaces is not None else cfg.get("namespaces")
 
-    def path(self, *parts: str) -> DocChain:
-        """链式入口：指定资源路径，返回 DocChain。"""
-        return DocChain(self, list(parts))
+    def path(self, path_spec: str) -> Path:
+        """指定路径，返回 Path，用于 create/find/update/delete/list。"""
+        parts = [p for p in path_spec.strip("/").split("/") if p]
+        return Path(self, parts)
 
-    def _resolve_key(self, uri: str, for_file: bool = False) -> str:
+    def _resolve_key(self, uri: str) -> str:
         """解析 URI 为存储键。"""
         _, full_path = parse(uri, self._namespaces)
-        if for_file and not is_file_uri(full_path):
-            full_path = ensure_md(full_path)
         return to_object_key(full_path, self._storage._prefix)
 
     def _uri_path(self, uri: str) -> str:
-        """获取 URI 对应的路径（用于 list）。"""
+        """获取 URI 对应路径（用于 list）。"""
         _, full_path = parse(uri, self._namespaces)
         return full_path
 
-    def create(self, uri: str, content: str) -> None:
-        """创建 .md 文件。"""
-        key = self._resolve_key(uri, for_file=True)
+    def create_file(self, uri: str, content: str) -> None:
+        """创建文件。"""
+        key = self._resolve_key(uri)
         self._storage.put(key, content)
 
-    def read(self, uri: str) -> str:
-        """读取 .md 文件内容。"""
-        key = self._resolve_key(uri, for_file=True)
+    def find(self, uri: str) -> VFSFile:
+        """查找文件并返回文件对象。"""
+        return self.find_file(uri)
+
+    def find_file(self, uri: str) -> VFSFile:
+        """查找文件并返回文件对象。"""
+        # 先验证目标存在，确保语义是 find 文件对象
+        self._read_text(uri)
+        return VFSFile(self, uri)
+
+    def create_folder(self, uri: str) -> None:
+        """创建文件夹（创建以 / 结尾的目录对象）。"""
+        _, full_path = parse(uri, self._namespaces)
+        folder = full_path.rstrip("/")
+        if not folder:
+            raise ValueError("cannot create root folder")
+        folder_key = to_object_key(f"{folder}/", self._storage._prefix)
+        self._storage.put(folder_key, "")
+
+    def find_folder(self, uri: str) -> VFSFolder:
+        """查找文件夹并返回文件夹对象。"""
+        if not self.exists_folder(uri):
+            raise NotFoundError(uri)
+        return VFSFolder(self, uri)
+
+    def _read_text(self, uri: str) -> str:
+        """读取原始文本内容。"""
+        key = self._resolve_key(uri)
         try:
             data = self._storage.get(key)
             return data.decode("utf-8")
         except NotFoundError:
             raise NotFoundError(uri)
 
-    def update(self, uri: str, content: str) -> None:
-        """全量更新 .md 文件。"""
-        key = self._resolve_key(uri, for_file=True)
+    def _write_text(self, uri: str, content: str) -> None:
+        """写入原始文本内容。"""
+        key = self._resolve_key(uri)
         self._storage.put(key, content)
 
+    def update_file(self, uri: str, content: str) -> None:
+        """全量更新文件内容。"""
+        self._write_text(uri, content)
+
     def delete(self, uri: str) -> None:
-        """删除 .md 文件。"""
-        key = self._resolve_key(uri, for_file=True)
+        """删除文件。"""
+        key = self._resolve_key(uri)
         self._storage.delete(key)
 
-    def exists(self, uri: str) -> bool:
-        """检查 URI 是否存在。"""
-        key = self._resolve_key(uri, for_file=True)
+    def exists_file(self, uri: str) -> bool:
+        """检查文件是否存在。"""
+        key = self._resolve_key(uri)
         return self._storage.exists(key)
 
-    def list(self, uri: str) -> list[str]:
-        """列举目录下的子项（文件或子目录）。
+    def exists_folder(self, uri: str) -> bool:
+        """检查文件夹是否存在。"""
+        _, full_path = parse(uri, self._namespaces)
+        folder = full_path.rstrip("/")
+        if not folder:
+            return False
 
-        Returns:
-            名称列表，目录以 / 结尾，如 ['api.md', 'docs/']
-        """
+        folder_key = to_object_key(f"{folder}/", self._storage._prefix)
+        if self._storage.exists(folder_key):
+            return True
+
+        items = self.list(uri)
+        return len(items) > 0
+
+    def list(self, uri: str) -> list[str]:
+        """列举目录下子项（文件或子目录）。"""
         path = self._uri_path(uri)
         if path and not path.endswith("/"):
             path += "/"
-        # list_keys 内部会通过 _key 添加 bucket prefix
-        return self._storage.list_keys(path or "")
+        items = self._storage.list_keys(path or "")
+        # 去重，避免目录对象和 common_prefix 同时返回导致重复。
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in items:
+            if item in seen:
+                continue
+            seen.add(item)
+            result.append(item)
+        return result
 
     def tree(self, uri: str, max_depth: int = -1) -> str:
         """输出目录树形结构。"""
@@ -133,138 +226,3 @@ class MindMarkClient:
         lines.append(base)
         _walk(base, "", 0)
         return "\n".join(lines)
-
-    # --- Markdown 格式操作 ---
-
-    def add_heading(
-        self,
-        uri: str,
-        text: str,
-        level: int = 1,
-        attrs: dict[str, str] | None = None,
-    ) -> None:
-        """在文档末尾添加标题。attrs 如 {"id": "install"} 会生成 {#id=install}。"""
-        content = self.read(uri)
-        self.update(uri, _add_heading(content, text, level, attrs))
-
-    def add_heading_with_content(
-        self,
-        uri: str,
-        text: str,
-        section_content: str,
-        level: int = 1,
-        attrs: dict[str, str] | None = None,
-    ) -> None:
-        """在文档末尾添加标题及其内容。"""
-        content = self.read(uri)
-        self.update(
-            uri,
-            _add_heading_with_content(content, text, section_content, level, attrs),
-        )
-
-    def append(self, uri: str, content: str) -> None:
-        """在文档末尾追加内容。"""
-        existing = self.read(uri)
-        self.update(uri, _append_content(existing, content))
-
-    def insert_under_heading(self, uri: str, heading_text: str, content: str) -> None:
-        """在指定标题下插入内容。"""
-        existing = self.read(uri)
-        self.update(uri, _insert_under_heading(existing, heading_text, content))
-
-    def replace_heading_content(
-        self, uri: str, heading_text: str, new_content: str
-    ) -> None:
-        """替换指定标题下的内容。"""
-        existing = self.read(uri)
-        self.update(uri, _replace_heading_content(existing, heading_text, new_content))
-
-    def get_headings(self, uri: str) -> list[dict[str, Any]]:
-        """获取文档中所有标题。含 level, text, line_start, attrs。"""
-        content = self.read(uri)
-        headings = _get_headings(content)
-        return [
-            {
-                "level": h.level,
-                "text": h.text,
-                "line_start": h.line_start,
-                "attrs": getattr(h, "attrs", {}),
-            }
-            for h in headings
-        ]
-
-    def get_section(self, uri: str, heading_text: str) -> str:
-        """获取指定标题下的内容块。"""
-        content = self.read(uri)
-        return _get_section(content, heading_text)
-
-    # --- 按字段/值操作（类数据库按字段定位）---
-
-    def set_section_by_field(
-        self,
-        uri: str,
-        field: str,
-        value: str,
-        heading_text: str,
-        section_content: str,
-        level: int = 2,
-    ) -> None:
-        """按 field=value 设置段落。存在则更新，否则追加。标题带 {#field=value} 属性。"""
-        content = self.read(uri)
-        self.update(
-            uri,
-            _set_section_by_field(
-                content, field, value, heading_text, section_content, level
-            ),
-        )
-
-    def set_section_by_id(
-        self,
-        uri: str,
-        section_id: str,
-        heading_text: str,
-        section_content: str,
-        level: int = 2,
-    ) -> None:
-        """按 id 设置段落。等价于 set_section_by_field(..., "id", section_id, ...)。"""
-        self.set_section_by_field(
-            uri, "id", section_id, heading_text, section_content, level
-        )
-
-    def get_section_by_field(self, uri: str, field: str, value: str) -> str:
-        """按 field=value 获取段落内容。"""
-        content = self.read(uri)
-        return _get_section_by_field(content, field, value)
-
-    def get_section_by_id(self, uri: str, section_id: str) -> str:
-        """按 id 获取段落内容。"""
-        content = self.read(uri)
-        return _get_section_by_id(content, section_id)
-
-    def get_section_by_ref(
-        self, uri: str, ref: str | dict[str, str]
-    ) -> str:
-        """按标题引用获取段落。ref 为标题文本或属性 dict，支持多属性匹配。"""
-        content = self.read(uri)
-        return _get_section_by_ref(content, ref)
-
-    def get_heading_with_context(
-        self,
-        uri: str,
-        heading_ref: str | dict[str, str],
-        before: int = 0,
-        after: int = 0,
-        include_heading: bool = True,
-    ) -> str:
-        """获取指定标题及上下文。heading_ref 可为标题文本或 {"id": "install"} 等属性。"""
-        content = self.read(uri)
-        return _get_heading_with_context(
-            content, heading_ref, before, after, include_heading
-        )
-
-    def list_sections_by_field(
-        self, uri: str, field: str | None = None
-    ) -> list[dict[str, Any]]:
-        """列举所有带属性的段落，可按 field 筛选。"""
-        content = self.read(uri)
-        return _list_sections_by_field(content, field)

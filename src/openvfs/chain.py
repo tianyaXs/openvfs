@@ -1,7 +1,4 @@
-"""链式构建器：资源路径 -> 文档 -> 标题/内容块 -> 写入或按属性获取
-
-设计参考 DrissionPage：简洁而强大，链式调用。
-"""
+"""链式构建器：Path.file(name) -> heading/cell/link -> write；cell 可带属性。"""
 
 from __future__ import annotations
 
@@ -47,133 +44,108 @@ def _format_block(
     return content.strip() + "\n\n"
 
 
-class DocChain:
-    """链式文档构建与读取。"""
+class DocBuilder:
+    """链式文档构建器：基于 Path，以 cell 为单位添加标题和内容，cell 可带属性。"""
 
-    def __init__(self, client: Any, path_parts: list[str], doc_name: str = "") -> None:
-        self._client = client
-        self._path_parts = list(path_parts)
-        self._doc_name = doc_name
-        self._buffer: list[str] = []
+    def __init__(self, path: Any, name: str) -> None:
+        self._path = path
+        self._name = name.strip()
+        if not self._name:
+            raise ValueError("文件名不能为空")
+        if not self._name.endswith(".md"):
+            self._name = f"{self._name}.md"
+        self._cells: list[dict[str, Any]] = []
 
-    def _uri_path(self) -> str:
-        path = "/".join(self._path_parts).strip("/")
-        if self._doc_name:
-            name = self._doc_name if self._doc_name.endswith(".md") else f"{self._doc_name}.md"
-            path = f"{path}/{name}" if path else name
-        return path
-
-    def _uri(self) -> str:
-        p = self._uri_path()
-        return f"{SCHEME}://{p}" if p else f"{SCHEME}://"
-
-    def path(self, *parts: str) -> DocChain:
-        """追加资源路径（可多次调用）。"""
-        self._path_parts.extend(str(p).strip("/") for p in parts if str(p).strip())
-        return self
-
-    def doc(self, name: str) -> DocChain:
-        """指定文档名（自动补 .md）。"""
-        self._doc_name = name.strip()
-        return self
-
-    def heading(
-        self,
-        text: str,
-        level: int = 2,
-        **attrs: str,
-    ) -> DocChain:
-        """添加标题，可带属性 {#k=v}。"""
+    def heading(self, text: str, level: int = 2, **attrs: str) -> DocBuilder:
+        """添加标题。attrs 如 id=install 会生成为 {#id=install}。"""
         attrs_dict = {k: v for k, v in attrs.items() if v is not None}
-        line = f"{'#' * level} {text}{_format_attrs(attrs_dict)}\n"
-        self._buffer.append(line)
+        self._cells.append({"kind": "heading", "text": text, "level": level, "attrs": attrs_dict})
         return self
 
-    def block(
+    def cell(
         self,
         content: str,
         type: str = "text",
-        lang: str | None = None,
+        lang: str = "",
         link_text: str | None = None,
-        **block_attrs: Any,
-    ) -> DocChain:
-        """添加内容块。type: text | code | json | link。block_attrs 写入块前注释。"""
-        comment = _block_comment_attrs(block_attrs)
-        body = _format_block(content, block_type=type, lang=lang, link_text=link_text)
-        self._buffer.append(comment + body)
+        **attrs: str,
+    ) -> DocBuilder:
+        """添加内容 cell。type: text | code | json | link。attrs 会写入块前注释便于按属性定位。"""
+        t = (type or "text").lower()
+        attrs_dict = {k: v for k, v in attrs.items() if v is not None}
+        self._cells.append({
+            "kind": "cell",
+            "content": content,
+            "type": t,
+            "lang": lang or "",
+            "link_text": link_text,
+            "attrs": attrs_dict,
+        })
         return self
 
-    def text(self, content: str, **block_attrs: Any) -> DocChain:
-        """添加文本块。"""
-        return self.block(content, type="text", **block_attrs)
+    def text(self, content: str, **attrs: str) -> DocBuilder:
+        """添加文本 cell。"""
+        return self.cell(content, type="text", **attrs)
 
-    def code(self, content: str, lang: str = "", **block_attrs: Any) -> DocChain:
-        """添加代码块。"""
-        return self.block(content, type="code", lang=lang, **block_attrs)
+    def code(self, content: str, lang: str = "", **attrs: str) -> DocBuilder:
+        """添加代码 cell。"""
+        return self.cell(content, type="code", lang=lang, **attrs)
 
-    def json_block(self, content: str, **block_attrs: Any) -> DocChain:
-        """添加 JSON 块。"""
-        return self.block(content, type="json", **block_attrs)
+    def json_block(self, content: str, **attrs: str) -> DocBuilder:
+        """添加 JSON cell。"""
+        return self.cell(content, type="json", **attrs)
 
-    def link(self, url: str, text: str | None = None, **block_attrs: Any) -> DocChain:
-        """添加链接块。"""
-        return self.block(url, type="link", link_text=text, **block_attrs)
+    def link(self, url: str, text: str | None = None, **attrs: str) -> DocBuilder:
+        """添加链接 cell。"""
+        return self.cell(url, type="link", link_text=text or url, **attrs)
 
     def build(self) -> str:
-        """返回当前 buffer 拼接内容。"""
-        return "".join(self._buffer).rstrip() + "\n"
+        """将当前 cell 列表渲染为 Markdown 字符串。"""
+        out: list[str] = []
+        for u in self._cells:
+            if u["kind"] == "heading":
+                line = f"{'#' * u['level']} {u['text']}{_format_attrs(u.get('attrs'))}\n"
+                out.append(line)
+            else:
+                comment = _block_comment_attrs(u.get("attrs"))
+                body = _format_block(
+                    u["content"],
+                    block_type=u["type"],
+                    lang=u.get("lang"),
+                    link_text=u.get("link_text"),
+                )
+                out.append(comment + body)
+        return "".join(out).rstrip() + "\n"
 
-    def write(self, overwrite: bool = False) -> DocChain:
-        """写入 TOS。若 overwrite 则覆盖，否则与已有内容拼接。"""
-        uri = self._uri()
+    def write(self, overwrite: bool = True) -> DocBuilder:
+        """将构建结果写入存储。"""
         body = self.build()
-        if overwrite or not self._client.exists(uri):
-            self._client.create(uri, body)
+        if overwrite or not self._path.exists_file(self._name):
+            self._path.create_file(self._name, body)
         else:
-            existing = self._client.read(uri)
-            self._client.update(uri, existing.rstrip() + "\n\n" + body)
-        self._buffer = []
+            existing = self._path.find_file(self._name).read()
+            self._path.update_file(self._name, existing.rstrip() + "\n\n" + body)
+        self._cells = []
         return self
 
-    def read(self) -> str:
-        """读取当前文档全文。"""
-        return self._client.read(self._uri())
+    def get(self) -> str:
+        """读取当前文件全文。"""
+        return self._path.find_file(self._name).read()
 
-    def get_block(self, **attrs: str) -> str:
-        """按标题属性获取内容。支持多属性匹配，便于精确定位。"""
-        uri = self._uri()
+    def get_cell(self, **attrs: str) -> str:
+        """按 cell 属性获取内容。如 get_cell(id="install")。"""
+        uri = self._path._file_uri(self._name)
+        client = self._path._client
         if not attrs:
-            raise ValueError("至少指定一个属性，如 id=xxx 或 type=work_report,from=task_executor_agent")
+            raise ValueError("至少指定一个属性，如 id=install")
         if len(attrs) == 1 and "id" in attrs:
-            return self._client.get_section_by_id(uri, attrs["id"])
+            return client.get_section_by_id(uri, attrs["id"])
         if len(attrs) == 1:
             k, v = next(iter(attrs.items()))
-            return self._client.get_section_by_field(uri, k, v)
-        return self._client.get_section_by_ref(uri, attrs)
+            return client.get_section_by_field(uri, k, v)
+        return client.get_section_by_ref(uri, attrs)
 
-    def list_blocks(self, field: str | None = None) -> list[dict[str, Any]]:
-        """列举带属性的段落，可按 field 筛选。用于 TASK 时可按 msg_id/type/from 等筛出再 get_block。"""
-        return self._client.list_sections_by_field(self._uri(), field)
-
-    def get_by_hierarchy(self, *level_attrs: str) -> str:
-        """按属性层级获取。如 get_by_hierarchy('id=install', 'id=step1') 逐级下钻。"""
-        uri = self._uri()
-        content = self._client.read(uri)
-        from openvfs.markdown.parser import get_headings, find_heading_by_field
-
-        lines = content.split("\n")
-        scope_lines = lines
-        for level_spec in level_attrs:
-            if "=" not in level_spec:
-                continue
-            k, _, v = level_spec.strip().partition("=")
-            k, v = k.strip(), v.strip()
-            scope_content = "\n".join(scope_lines)
-            headings = get_headings(scope_content)
-            h = find_heading_by_field(headings, k, v)
-            if not h:
-                raise ValueError(f"未找到 {k}={v}")
-            start_idx = h.line_start
-            end_idx = (h.line_end - 1) if h.line_end else (len(scope_lines) - 1)
-            scope_lines = scope_lines[start_idx : end_idx + 1]
-        return "\n".join(scope_lines).rstrip()
+    def list_cells(self, field: str | None = None) -> list[dict[str, Any]]:
+        """列举带属性的 cell（段落），可按 field 筛选。"""
+        uri = self._path._file_uri(self._name)
+        return self._path._client.list_sections_by_field(uri, field)

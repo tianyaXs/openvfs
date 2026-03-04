@@ -1,6 +1,6 @@
 [project]
 name = "openvfs"
-version = "0.1.3"
+version = "0.1.4"
 description = "Agent 专用 Markdown 虚拟文件系统"
 readme = "README.md"
 license = "MIT"
