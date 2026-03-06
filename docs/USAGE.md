@@ -49,7 +49,7 @@ file = path.find_file("doc.md")
 - `read()`：原始内容
 - `list_cells()`：列举所有 cell
 - `add_cell(cell_type, content, attrs={...}, **meta)`
-- `add_cells([...])`：批量追加 cell（一次写入）
+- `add_cells([...])`：批量追加 cell
 - `find_cell(**attrs)`：按多个属性标签查询首个 cell
 - `find_cells(**attrs)`：按多个属性标签查询全部 cell
 - `update_cell(match_attrs, content=..., cell_type=..., attrs=..., **meta)`

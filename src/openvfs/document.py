@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -11,6 +12,11 @@ from typing import Any
 SUPPORTED_CELL_TYPES = {"text", "json", "code", "link", "heading"}
 MARKER_PREFIX = "<!-- openvfs-cell "
 MARKER_SUFFIX = " -->"
+VERSION_META_KEY = "_openvfs_version"
+
+_RE_CODE_FENCE = re.compile(r"^```([^\n]*)\n([\s\S]*?)\n```\s*$")
+_RE_HEADING = re.compile(r"^(#{1,6})\s+(.+)$")
+_RE_LINK = re.compile(r"^\[(.+)\]\((.+)\)$")
 
 
 @dataclass
@@ -46,9 +52,11 @@ class Cell:
 class VFSFile:
     """虚拟文件对象，支持按 Cell 进行增删改查。"""
 
-    def __init__(self, client: Any, uri: str):
+    def __init__(self, client: "Client", uri: str):
         self._client = client
         self.uri = uri
+        self._cells_cache: list[Cell] | None = None
+        self._cache_content: str | None = None
 
     @staticmethod
     def _normalize_attrs(attrs: dict[str, str] | None) -> dict[str, str]:
@@ -107,7 +115,7 @@ class VFSFile:
 
     @staticmethod
     def _parse_code_fence(body: str) -> tuple[str, str] | None:
-        m = re.match(r"^```([^\n]*)\n([\s\S]*?)\n```\s*$", body.strip())
+        m = _RE_CODE_FENCE.match(body.strip())
         if not m:
             return None
         lang = m.group(1).strip()
@@ -117,7 +125,7 @@ class VFSFile:
     @staticmethod
     def _parse_heading(body: str) -> tuple[int, str] | None:
         line = body.strip().splitlines()[0] if body.strip() else ""
-        m = re.match(r"^(#{1,6})\s+(.+)$", line)
+        m = _RE_HEADING.match(line)
         if not m:
             return None
         return len(m.group(1)), m.group(2).strip()
@@ -125,7 +133,7 @@ class VFSFile:
     @staticmethod
     def _parse_link(body: str) -> tuple[str, str] | None:
         line = body.strip()
-        m = re.match(r"^\[(.+)\]\((.+)\)$", line)
+        m = _RE_LINK.match(line)
         if not m:
             return None
         return m.group(1), m.group(2)
@@ -187,26 +195,43 @@ class VFSFile:
                     cell_meta["text"] = text
                     content = url
 
-            cells.append(Cell(type=cell_type, content=content, attrs=attrs, meta=cell_meta))
+            cells.append(
+                Cell(type=cell_type, content=content, attrs=attrs, meta=cell_meta)
+            )
 
         return cells
 
-    def _parse_cells(self) -> list[Cell]:
+    def _parse_cells(self, use_cache: bool = True) -> list[Cell]:
         raw = self._client._read_text(self.uri)
+        # 缓存自动失效：比较内容哈希
+        if use_cache and self._cells_cache is not None and self._cache_content == raw:
+            return self._cells_cache
+
         if not raw.strip():
+            self._cache_content = raw
+            self._cells_cache = []
             return []
 
         # 兼容旧 JSON 文档格式
         if self._is_json_document(raw):
             payload = json.loads(raw)
-            return [Cell.from_dict(item) for item in payload.get("cells", [])]
+            cells = [Cell.from_dict(item) for item in payload.get("cells", [])]
+            self._cache_content = raw
+            self._cells_cache = cells
+            return cells
 
-        return self._parse_markdown_cells(raw)
+        cells = self._parse_markdown_cells(raw)
+        self._cache_content = raw
+        self._cells_cache = cells
+        return cells
 
     def _write_cells(self, cells: list[Cell]) -> None:
         blocks = [self._cell_to_markdown(c) for c in cells]
         content = "".join(blocks).rstrip() + "\n"
         self._client._write_text(self.uri, content)
+        # 自动更新缓存
+        self._cache_content = content
+        self._cells_cache = cells
 
     def read(self) -> str:
         """读取原始文件内容。"""
@@ -214,7 +239,7 @@ class VFSFile:
 
     def list_cells(self) -> list[Cell]:
         """列举全部 cell。"""
-        return self._parse_cells()
+        return self._parse_cells(use_cache=True)
 
     def add_cell(
         self,

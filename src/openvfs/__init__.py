@@ -18,6 +18,7 @@ from openvfs.client import Client, Path
 from openvfs.document import Cell, VFSFile
 from openvfs.folder import VFSFolder
 from openvfs.exceptions import (
+    ConcurrentModifyError,
     InvalidURIError,
     NotFoundError,
     OpenVFSError,
@@ -30,6 +31,7 @@ __all__ = [
     "Path",
     "VFSFile",
     "VFSFolder",
+    "ConcurrentModifyError",
     "InvalidURIError",
     "NotFoundError",
     "OpenVFSError",

@@ -33,7 +33,7 @@ pip install openvfs
 文件内容以 Markdown 原文存储，每个 cell 对应一个 Markdown 块。
 
 - `read()`：读取原始内容
-- `list_cells()`：获取所有 cell
+- `list_cells()`：获取所有 cell（内部自动缓存优化）
 - `add_cell(cell_type, content, attrs={...}, **meta)`
 - `add_cells([...])`：批量追加 cell（一次写入）
 - `find_cell(**attrs)`：按多个属性标签定位单个 cell

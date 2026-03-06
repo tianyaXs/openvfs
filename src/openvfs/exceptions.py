@@ -29,3 +29,16 @@ class InvalidURIError(OpenVFSError):
     def __init__(self, uri: str, message: str | None = None):
         self.uri = uri
         super().__init__(message or f"Invalid URI: {uri}")
+
+
+class ConcurrentModifyError(OpenVFSError):
+    """并发修改冲突"""
+
+    def __init__(self, message: str = "Concurrent modification detected"):
+        super().__init__(message)
+
+
+class LockError(OpenVFSError):
+    """分布式锁异常"""
+
+    pass
