@@ -1,6 +1,8 @@
-"""存储层"""
+"""兼容层：请改用 openvfs.stores。"""
 
-from openvfs.storage.base import StorageBackend
-from openvfs.storage.tos import TOSStorage
+from openvfs.stores import BaseStore, TOSStore
 
-__all__ = ["StorageBackend", "TOSStorage"]
+StorageBackend = BaseStore
+TOSStorage = TOSStore
+
+__all__ = ["BaseStore", "StorageBackend", "TOSStore", "TOSStorage"]

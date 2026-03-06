@@ -13,6 +13,7 @@ def _config_path() -> Path:
 def load_config() -> dict[str, Any]:
     """加载配置：环境变量 > 配置文件 > 默认值。"""
     defaults = {
+        "store": "tos",
         "bucket": "openvfs",
         "prefix": "",
         "endpoint": "tos-cn-beijing.volces.com",
@@ -32,6 +33,7 @@ def load_config() -> dict[str, Any]:
             struct = file_cfg.get("structure", {})
             defaults.update(
                 {
+                    "store": storage.get("provider", defaults["store"]),
                     "bucket": storage.get("bucket", defaults["bucket"]),
                     "prefix": storage.get("prefix", defaults["prefix"]),
                     "endpoint": storage.get("endpoint", defaults["endpoint"]),
@@ -45,6 +47,8 @@ def load_config() -> dict[str, Any]:
             pass
 
     # 环境变量覆盖
+    if os.getenv("OPENVFS_STORE"):
+        defaults["store"] = os.getenv("OPENVFS_STORE")
     if os.getenv("OPENVFS_BUCKET"):
         defaults["bucket"] = os.getenv("OPENVFS_BUCKET")
     if os.getenv("OPENVFS_PREFIX") is not None:
