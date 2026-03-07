@@ -8,7 +8,7 @@ requires-python = ">=3.10"
 authors = [
     { name = "OpenVFS Contributors" }
 ]
-keywords = ["markdown", "vfs", "agent", "tos", "storage", "volcengine"]
+keywords = ["markdown", "vfs", "agent", "store", "storage", "middleware"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -21,7 +21,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "tos>=2.6.0",
+    "py-key-value-aio[s3]>=0.4.4",
 ]
 
 [project.optional-dependencies]
@@ -41,9 +41,3 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/openvfs"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-filterwarnings = [
-    "ignore::SyntaxWarning:tos.utils",
-    "ignore::DeprecationWarning:tos",
-]
