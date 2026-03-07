@@ -1,17 +1,13 @@
 """python -m openvfs"""
 
-import os
-
-from openvfs import OpenVFS
+from openvfs import OpenVfs
 
 
 def main() -> int:
-    if not os.getenv("TOS_ACCESS_KEY") or not os.getenv("TOS_SECRET_KEY"):
-        print("请设置 TOS_ACCESS_KEY 和 TOS_SECRET_KEY 环境变量")
-        return 1
-    OpenVFS()
-    print("OpenVFS 客户端已初始化")
-    print("示例: client.create('openvfs://resources/demo/readme.md', '# Demo')")
+    vfs = OpenVfs.init_vfs()
+    vfs.create("openvfs://resources/demo/readme.md", "# Demo")
+    print("OpenVFS 已初始化")
+    print("示例: myvfs = OpenVfs.init_vfs()")
     return 0
 
 

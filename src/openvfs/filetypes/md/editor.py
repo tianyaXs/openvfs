@@ -1,6 +1,6 @@
 """Markdown 格式编辑"""
 
-from openvfs.markdown.parser import (
+from openvfs.filetypes.md.parser import (
     get_headings,
     find_heading,
     find_heading_by_field,

@@ -28,3 +28,7 @@ class BaseStore(ABC):
     @abstractmethod
     def list_keys(self, prefix: str, delimiter: str = "/") -> list[str]:
         """列举指定前缀下的对象键或逻辑目录。"""
+
+    def create_folder(self, path: str) -> None:
+        """创建逻辑目录，默认由具体实现按需覆盖。"""
+        return None

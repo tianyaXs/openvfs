@@ -1,90 +1,66 @@
-"""OpenVFS 主客户端。"""
+"""OpenVFS 门面对象。"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from openvfs.chain import DocumentBuilder
-from openvfs.config import load_config
-from openvfs.stores.base import BaseStore
-from openvfs.uri import ensure_md, is_file_uri, parse, to_object_key
-from openvfs.vfs import VfsDirectory, VfsDocument
+from openvfs.stores import BaseStore, MemoryStore, adapt_store, create_default_store
+from openvfs.vfs.builder import DocumentBuilder
+from openvfs.vfs.config import load_config
+from openvfs.vfs.directory import VfsDirectory
+from openvfs.vfs.document import VfsDocument
+from openvfs.vfs.uri import ensure_md, is_file_uri, parse, to_object_key
 
 
-class OpenVFS:
-    """OpenVFS 门面对象，负责配置、路径解析和 VFS 对象创建。"""
+class OpenVfs:
+    """OpenVFS 门面对象，负责路径解析和 VFS 对象创建。"""
 
     def __init__(
         self,
-        bucket: str | None = None,
-        prefix: str = "",
-        endpoint: str | None = None,
-        region: str | None = None,
-        ak: str | None = None,
-        sk: str | None = None,
+        store: BaseStore | Any | None = None,
         namespaces: list[str] | None = None,
-        store: BaseStore | None = None,
-    ):
+    ) -> None:
         cfg = load_config()
-        self._store = store or self._build_default_store(
-            bucket=bucket or cfg["bucket"],
-            prefix=prefix if prefix else cfg["prefix"],
-            endpoint=endpoint or cfg["endpoint"],
-            region=region or cfg["region"],
-            ak=ak,
-            sk=sk,
-            store_name=cfg.get("store", "tos"),
-        )
+        self._store = adapt_store(store) if store is not None else create_default_store()
         self._namespaces = namespaces if namespaces is not None else cfg.get("namespaces")
 
-    def _build_default_store(
-        self,
-        *,
-        bucket: str,
-        prefix: str,
-        endpoint: str,
-        region: str,
-        ak: str | None,
-        sk: str | None,
-        store_name: str,
-    ) -> BaseStore:
-        normalized = (store_name or "tos").strip().lower()
-        if normalized != "tos":
-            raise ValueError(
-                f"Unsupported default store: {store_name}. 请显式传入 store=..."
-            )
-        from openvfs.stores.tos import TOSStore
+    @classmethod
+    def init_vfs(
+        cls,
+        store: BaseStore | Any | None = None,
+        namespaces: list[str] | None = None,
+    ) -> OpenVfs:
+        """初始化 VFS。默认使用 MemoryStore。"""
+        return cls(store=store, namespaces=namespaces)
 
-        return TOSStore(
-            bucket=bucket,
-            prefix=prefix,
-            endpoint=endpoint,
-            region=region,
-            ak=ak,
-            sk=sk,
-        )
+    @classmethod
+    def default_store(cls) -> MemoryStore:
+        """返回默认内存 Store。"""
+        return MemoryStore()
 
-    def path(self, *parts: str) -> DocumentBuilder:
-        """链式入口：指定资源路径，返回文档构建器。"""
+    def cd_path(self, *parts: str) -> DocumentBuilder:
         return DocumentBuilder(self, list(parts))
 
+    def create_folder(self, uri: str) -> None:
+        normalized = self._uri_path(uri).rstrip("/")
+        self._store.create_folder(normalized)
+
+    def mkdir(self, uri: str) -> None:
+        self.create_folder(uri)
+
     def document(self, uri: str) -> VfsDocument:
-        """创建文档对象。"""
         return VfsDocument(self, uri)
 
     def directory(self, uri: str) -> VfsDirectory:
-        """创建目录对象。"""
         return VfsDirectory(self, uri)
 
     def _resolve_key(self, uri: str, for_file: bool = False) -> str:
-        """解析 URI 为存储键。"""
         _, full_path = parse(uri, self._namespaces)
         if for_file and not is_file_uri(full_path):
             full_path = ensure_md(full_path)
         return to_object_key(full_path, self._store._prefix)
 
     def _uri_path(self, uri: str) -> str:
-        """获取 URI 对应的路径。"""
         _, full_path = parse(uri, self._namespaces)
         return full_path
 
@@ -109,13 +85,7 @@ class OpenVFS:
     def tree(self, uri: str, max_depth: int = -1) -> str:
         return self.directory(uri).tree(max_depth=max_depth)
 
-    def add_heading(
-        self,
-        uri: str,
-        text: str,
-        level: int = 1,
-        attrs: dict[str, str] | None = None,
-    ) -> None:
+    def add_heading(self, uri: str, text: str, level: int = 1, attrs: dict[str, str] | None = None) -> None:
         self.document(uri).add_heading(text, level=level, attrs=attrs)
 
     def add_heading_with_content(
@@ -126,12 +96,7 @@ class OpenVFS:
         level: int = 1,
         attrs: dict[str, str] | None = None,
     ) -> None:
-        self.document(uri).add_heading_with_content(
-            text,
-            section_content,
-            level=level,
-            attrs=attrs,
-        )
+        self.document(uri).add_heading_with_content(text, section_content, level=level, attrs=attrs)
 
     def append(self, uri: str, content: str) -> None:
         self.document(uri).append(content)
@@ -157,13 +122,7 @@ class OpenVFS:
         section_content: str,
         level: int = 2,
     ) -> None:
-        self.document(uri).set_section_by_field(
-            field,
-            value,
-            heading_text,
-            section_content,
-            level=level,
-        )
+        self.document(uri).set_section_by_field(field, value, heading_text, section_content, level=level)
 
     def set_section_by_id(
         self,
@@ -173,12 +132,7 @@ class OpenVFS:
         section_content: str,
         level: int = 2,
     ) -> None:
-        self.document(uri).set_section_by_id(
-            section_id,
-            heading_text,
-            section_content,
-            level=level,
-        )
+        self.document(uri).set_section_by_id(section_id, heading_text, section_content, level=level)
 
     def get_section_by_field(self, uri: str, field: str, value: str) -> str:
         return self.document(uri).get_section_by_field(field, value)
@@ -197,12 +151,10 @@ class OpenVFS:
         after: int = 0,
         include_heading: bool = True,
     ) -> str:
-        return self.document(uri).get_heading_with_context(
-            heading_ref,
-            before=before,
-            after=after,
-            include_heading=include_heading,
-        )
+        return self.document(uri).get_heading_with_context(heading_ref, before=before, after=after, include_heading=include_heading)
 
     def list_sections_by_field(self, uri: str, field: str | None = None) -> list[dict[str, Any]]:
         return self.document(uri).list_sections_by_field(field)
+
+
+OpenVFS = OpenVfs

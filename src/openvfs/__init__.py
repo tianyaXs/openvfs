@@ -1,23 +1,25 @@
-"""OpenVFS - Agent 专用 Markdown 文件系统"""
+"""OpenVFS - Agent 专用 Markdown 文件系统中间件。"""
 
-from openvfs.chain import DocumentBuilder
-from openvfs.client import OpenVFS
-from openvfs.exceptions import (
-    InvalidURIError,
-    MindMarkError,
-    NotFoundError,
-    StorageError,
-)
-from openvfs.stores import BaseStore, TOSStore
-from openvfs.vfs import VfsDirectory, VfsDocument
+from __future__ import annotations
+
+from typing import Any
+
+from openvfs.exceptions import InvalidURIError, MindMarkError, NotFoundError, StorageError
+from openvfs.stores import BaseStore, KeyValueStoreAdapter, MemoryStore, RedisStore, S3Store
+from openvfs.vfs import DocumentBuilder, OpenVFS, OpenVfs, VfsDirectory, VfsDocument
+
 
 __all__ = [
+    "OpenVfs",
     "OpenVFS",
     "DocumentBuilder",
     "VfsDocument",
     "VfsDirectory",
     "BaseStore",
-    "TOSStore",
+    "KeyValueStoreAdapter",
+    "MemoryStore",
+    "RedisStore",
+    "S3Store",
     "InvalidURIError",
     "MindMarkError",
     "NotFoundError",

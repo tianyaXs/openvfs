@@ -1,7 +1,4 @@
-"""URI 解析与校验
-
-资源结构可配置：namespaces 为 None 或 [] 时不限制路径首段，任意路径合法。
-"""
+"""URI 解析与校验。"""
 
 import re
 from typing import Sequence
@@ -17,18 +14,7 @@ def parse(
     uri: str,
     allowed_namespaces: Sequence[str] | None = DEFAULT_NAMESPACES,
 ) -> tuple[str, str]:
-    """解析 openvfs URI，返回 (namespace_or_first, full_path)。
-
-    Args:
-        uri: 如 openvfs://resources/project/docs/api.md 或 openvfs://any/path/doc.md
-        allowed_namespaces: 允许的首段集合；None 或 () 表示不校验，任意路径合法。
-
-    Returns:
-        (首段, full_path) 如 ("resources", "resources/project/docs/api.md")
-
-    Raises:
-        InvalidURIError: URI 格式无效
-    """
+    """解析 openvfs URI，返回 (首段, 完整路径)。"""
     if not uri or not isinstance(uri, str):
         raise InvalidURIError(uri or "", "URI must be non-empty string")
 
@@ -58,29 +44,21 @@ def parse(
 
 
 def to_object_key(uri_path: str, prefix: str = "") -> str:
-    """将 URI 路径转为 TOS 对象键。
-
-    Args:
-        uri_path:     如 resources/project/docs/api.md
-    prefix: 桶内前缀，如 openvfs/
-
-    Returns:
-        TOS 对象键
-    """
-    p = prefix.rstrip("/")
-    key = uri_path.lstrip("/")
-    if p:
-        return f"{p}/{key}"
-    return key
+    """将 URI 路径转为对象键。"""
+    normalized_prefix = prefix.rstrip("/")
+    normalized_key = uri_path.lstrip("/")
+    if normalized_prefix:
+        return f"{normalized_prefix}/{normalized_key}"
+    return normalized_key
 
 
 def ensure_md(uri_path: str) -> str:
-    """确保路径以 .md 结尾（用于创建/更新文件）。"""
+    """确保路径以 .md 结尾。"""
     if uri_path.endswith(".md"):
         return uri_path
     return f"{uri_path.rstrip('/')}.md"
 
 
 def is_file_uri(uri_path: str) -> bool:
-    """判断是否为文件 URI（以 .md 结尾）。"""
+    """判断是否为文件 URI。"""
     return uri_path.rstrip("/").endswith(".md")
