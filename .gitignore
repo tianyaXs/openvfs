@@ -18,3 +18,14 @@ wheels/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Local IDE files
+.idea/
+
+# Local planning docs (not for repository)
+docs/REFACTOR_PLAN.md
+docs/STRUCTURE.md
+notes.md
+task_plan.md
+使用文档-CELL使用v1.md
+发布.md
