@@ -1,6 +1,6 @@
 # OpenVFS 设计方案
 
-## Agent 专用虚拟文件系统
+## Agent 专用 Markdown 文件系统
 
 ---
 
@@ -8,11 +8,11 @@
 
 ### 1.1 目标与定位
 
-**OpenVFS** 是一个面向 AI Agent 的专用虚拟文件系统，提供文件/文件夹/内容单元块（cell）的完整 CRUD 能力。项目将发布至 PyPI，供其他系统以 Python 包形式直接引用。
+**OpenVFS** 是一个面向 AI Agent 的专用 Markdown 文件系统，以 `.md` 文件为核心载体，提供存储、更新、查询、删除等完整 CRUD 能力。项目将发布至 PyPI，供其他系统以 Python 包形式直接引用。
 
 **核心差异化**：
-- 纯对象存储语义，无向量化、无模型配置、无语义检索，轻量可嵌入
-- 围绕 Agent 工作流设计：结构化目录、文件对象 cell 化操作、确定性路径访问
+- 纯 Markdown 原生，无向量化、无模型配置、无语义检索，轻量可嵌入
+- 围绕 Agent 工作流设计：结构化目录、可编程格式操作、确定性路径访问
 - 云端持久化：基于火山云对象存储 (TOS) 落地，支持分布式与高可用
 
 ### 1.2 设计参考
@@ -88,7 +88,7 @@ TOS 中对象键与 URI 的映射规则：
 | 概念 | TOS 对应 | 说明 |
 |------|----------|------|
 | 桶 (Bucket) | 1 个专用桶 | 存储所有 OpenVFS 文件 |
-| 对象 (Object) | 文件与目录对象 | Key = `{prefix}/{uri_path}` |
+| 对象 (Object) | `.md` 文件 | Key = `{prefix}/{uri_path}` |
 | 目录 | 无真实目录 | 通过 Key 前缀模拟，如 `resources/project/docs/` |
 | 列举 | `list_objects` | 通过 `prefix` 实现目录列举 |
 
@@ -109,46 +109,57 @@ client = tos.TosClientV2(
 
 | 操作 | TOS API | 说明 |
 |------|---------|------|
-| 上传 | `put_object` / `put_object_from_file` | 存储/更新文件内容 |
-| 下载 | `get_object` | 读取文件内容 |
+| 上传 | `put_object` / `put_object_from_file` | 存储/更新 .md 内容 |
+| 下载 | `get_object` | 读取 .md 内容 |
 | 列举 | `list_objects` | 按 prefix 列举「目录」下对象 |
-| 删除 | `delete_object` | 删除单个对象 |
+| 删除 | `delete_object` | 删除单个 .md 文件 |
 | 存在性 | `head_object` | 判断文件是否存在 |
 
 ---
 
-## 四、文件与 Cell 操作设计
+## 四、Markdown 文件操作设计
 
 ### 4.1 CRUD API 概览
 
 | 操作 | 方法 | 说明 |
 |------|------|------|
-| 创建文件 | `create_file(uri, content)` | 新建文件 |
-| 创建文件夹 | `create_folder(uri)` | 创建目录对象（`folder/`） |
-| 查找文件 | `find(uri)` / `find_file(uri)` | 返回 `VFSFile` |
-| 查找文件夹 | `find_folder(uri)` | 返回 `VFSFolder` |
-| 更新文件 | `update_file(uri, content)` | 全量覆盖 |
-| 删除文件 | `delete(uri)` | 删除文件对象 |
-| 列举目录 | `list(uri)` | 列举目录下文件/子目录 |
-| 文件存在 | `exists_file(uri)` | 检查文件是否存在 |
-| 文件夹存在 | `exists_folder(uri)` | 检查文件夹是否存在 |
+| 创建 | `create(uri, content)` | 新建 .md 文件 |
+| 读取 | `read(uri)` | 获取完整内容 |
+| 更新 | `update(uri, content)` | 全量覆盖 |
+| 删除 | `delete(uri)` | 删除文件 |
+| 列举 | `list(uri)` | 列举目录下文件/子目录 |
+| 存在 | `exists(uri)` | 检查 URI 是否存在 |
 
-### 4.2 文件对象 Cell API
+### 4.2 结构化格式操作（一级/二级标题等）
 
-`VFSFile` 在单一 cell 层提供结构化内容操作：
+支持对已有 .md 内容做结构化编辑，而不必每次都全量读写。
+
+#### 4.2.1 标题层级模型
+
+Markdown 标题与层级：
+
+- `#` → 一级 (h1)
+- `##` → 二级 (h2)
+- `###` → 三级 (h3)
+- … 以此类推
+
+#### 4.2.2 格式操作 API
 
 | 操作 | 方法 | 说明 |
 |------|------|------|
-| 列举 cell | `list_cells()` | 返回全部 cell |
-| 追加 cell | `add_cell(cell_type, content, attrs, **meta)` | 添加一个 cell |
-| 批量追加 | `add_cells([...])` | 一次写入多个 cell |
-| 查找单个 cell | `find_cell(**attrs)` | 多属性 AND 匹配 |
-| 查找多个 cell | `find_cells(**attrs)` | 多属性 AND 匹配 |
-| 更新 cell | `update_cell(match_attrs, ...)` | 更新首个匹配 cell |
-| 删除 cell | `delete_cell(**attrs)` | 删除匹配 cell |
+| 添加一级标题 | `add_heading(uri, text, level=1)` | 在文档末尾或指定位置插入 |
+| 添加二级标题 | `add_heading(uri, text, level=2)` | 同上 |
+| 在标题下插入内容 | `insert_under_heading(uri, heading_text, content)` | 在指定标题下插入段落 |
+| 追加段落 | `append(uri, content)` | 在文档末尾追加 |
+| 替换标题内容 | `replace_heading_content(uri, heading_text, new_content)` | 替换某标题下内容 |
+| 获取标题列表 | `get_headings(uri)` | 返回所有标题及层级 |
+| 按标题切片 | `get_section(uri, heading_text)` | 获取某标题下的内容块 |
 
-支持类型：`text/json/code/link/heading`。
-持久化格式：文件原文为 Markdown，每个 cell 对应一个 Markdown 块。
+#### 4.2.3 实现思路
+
+- 使用 `mistune` 或正则解析 Markdown AST
+- 维护标题到行号的映射，支持精确定位插入/替换
+- 支持「在某个标题之后」插入新标题或内容
 
 ### 4.3 查询能力
 
@@ -206,22 +217,22 @@ openvfs/
 ├── README.md
 ├── openvfs/
 │   ├── __init__.py
-│   ├── client.py          # Client/Path：文件与文件夹操作
-│   ├── folder.py          # VFSFolder：文件夹对象
-│   ├── document.py        # VFSFile/Cell：文件对象与 cell 操作
+│   ├── bootstrap.py       # 初始化入口
+│   ├── vfs/               # VFS 领域模型与门面
 │   ├── uri.py             # URI 解析与校验
-│   ├── storage/
+│   ├── stores/
 │   │   ├── __init__.py
-│   │   ├── base.py        # StorageBackend 抽象
+│   │   ├── base.py        # BaseStore 抽象
 │   │   └── tos.py         # TOS 实现
-│   ├── markdown/          # 兼容模块（非主路径）
+│   ├── filetypes/
+│   │   ├── __init__.py
+│   │   ├── parser.py      # 标题解析
+│   │   └── editor.py      # 格式操作（add_heading 等）
 │   └── config.py          # 配置加载
 ├── tests/
 │   ├── test_client.py
-│   ├── test_chain.py
-│   ├── test_document_lifecycle.py
-│   ├── test_heading_advanced.py
-│   └── test_core_local.py
+│   ├── test_uri.py
+│   └── test_markdown.py
 └── docs/
     └── DESIGN.md
 ```
@@ -229,27 +240,30 @@ openvfs/
 ### 6.2 使用方式
 
 ```python
-import openvfs
+from openvfs import OpenVFS
 
-client = openvfs.Client()
-# 推荐：单字符串路径 + 文件/文件夹显式方法
-path = client.path("resources/my_project")
-path.create_folder("docs")
-path.create_file("readme.md", "# 项目说明\n\n...")
-content = path.find_file("readme.md").read()
-path.update_file("readme.md", new_content)
-path.delete("readme.md")
-items = path.list()
+# 初始化（自动从环境变量/配置文件加载）
+client = OpenVFS()
 
-# 文件对象（cell + 属性）
-file = client.find("openvfs://resources/project/readme.md")
-file.add_cell(cell_type="code", content="pip install openvfs", attrs={"id": "install", "scope": "guide"}, lang="bash")
-cell = file.find_cell(id="install", scope="guide")
+# 或显式配置
+client = OpenVFS(
+    bucket="my-bucket",
+    prefix="agent-docs/",
+    endpoint="tos-cn-beijing.volces.com",
+    region="cn-beijing"
+)
 
-# 或按完整 URI 操作
-client.create_folder("openvfs://resources/project")
-client.create_file("openvfs://resources/project/readme.md", "# 项目说明\n\n...")
-content = client.find("openvfs://resources/project/readme.md").read()
+# CRUD
+client.create("openvfs://resources/project/readme.md", "# 项目说明\n\n...")
+content = client.read("openvfs://resources/project/readme.md")
+client.update("openvfs://resources/project/readme.md", new_content)
+client.delete("openvfs://resources/project/readme.md")
+
+# 格式操作
+client.add_heading("openvfs://resources/project/readme.md", "安装步骤", level=2)
+client.insert_under_heading("openvfs://resources/project/readme.md", "安装步骤", "pip install openvfs")
+
+# 列举与树形结构
 items = client.list("openvfs://resources/")
 tree = client.tree("openvfs://resources/project/")
 ```
@@ -272,7 +286,7 @@ tree = client.tree("openvfs://resources/project/")
 
 ### 7.2 错误与异常
 
-- 统一异常类型：`openvfs.OpenVFSError`、`openvfs.NotFoundError`、`openvfs.StorageError`
+- 统一异常类型：`MindMarkError`（OpenVFS 基础异常）、`NotFoundError`、`StorageError`
 - 保留 TOS 原始 `request_id`，便于与火山云侧排查
 
 ---
@@ -282,7 +296,7 @@ tree = client.tree("openvfs://resources/project/")
 | 阶段 | 内容 | 优先级 |
 |------|------|--------|
 | Phase 1 | TOS 存储层封装、URI 解析、基础 CRUD | P0 |
-| Phase 2 | VFSFolder/VFSFile 对象模型、Cell 多属性检索 | P0 |
+| Phase 2 | MD 文件类型解析与标题操作（add_heading、insert_under_heading） | P0 |
 | Phase 3 | list/tree、grep、配置与异常体系 | P1 |
 | Phase 4 | 完善测试、文档、PyPI 发布 | P1 |
 

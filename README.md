@@ -1,73 +1,52 @@
 # OpenVFS
 
-面向 Agent 的虚拟文件系统，基于火山云 TOS 存储。
+Agent 专用 Markdown 虚拟文件系统中间件，底层基于可热插拔的 Store 后端。
 
 ## 安装
 
 ```bash
-pip install openvfs
+uv add py-key-value-aio
+uv add openvfs
 ```
-
-## 核心模型
-
-- `Client`：文件系统入口
-- `VFSFolder`：文件夹对象（由 `find_folder` 返回）
-- `VFSFile`：文件对象（由 `find` 返回）
-- `Cell`：单元内容块（`text/json/code/link/heading`）
-
-## 核心 API
-
-- `create_file(uri, content)`
-- `create_folder(uri)`
-- `find(uri) -> VFSFile`
-- `find_file(uri) -> VFSFile`
-- `find_folder(uri) -> VFSFolder`
-- `update_file(uri, content)`
-- `delete(uri)`
-- `exists_file(uri)`
-- `exists_folder(uri)`
-- `list(uri)`
-
-## 文件对象 API（VFSFile）
-
-文件内容以 Markdown 原文存储，每个 cell 对应一个 Markdown 块。
-
-- `read()`：读取原始内容
-- `list_cells()`：获取所有 cell（内部自动缓存优化）
-- `add_cell(cell_type, content, attrs={...}, **meta)`
-- `add_cells([...])`：批量追加 cell（一次写入）
-- `find_cell(**attrs)`：按多个属性标签定位单个 cell
-- `find_cells(**attrs)`：按多个属性标签查询多个 cell
-- `update_cell(match_attrs, content=..., cell_type=..., attrs=..., **meta)`
-- `delete_cell(**attrs)`
 
 ## 快速示例
 
 ```python
-import openvfs
+from openvfs import OpenVfs
 
-vfs = openvfs.Client()
-uri = "openvfs://resources/my_project/readme.md"
+myvfs = OpenVfs.init_vfs()
+file = myvfs.find_file("resources/project/readme", must_exist=False)
+if file is None:
+    raise RuntimeError("无法创建文件对象")
 
-vfs.create_folder("openvfs://resources/my_project")
-vfs.create_file(uri, "")
+file.create("# 项目说明\n")
+doc = file.as_markdown()
+doc.add_cell("安装", "uv add openvfs", attrs={"id": "install", "class": "guide"})
+doc.update_cell("@id=install", "uv add openvfs\nuv add py-key-value-aio")
 
-folder = vfs.find_folder("openvfs://resources/my_project")
-file = vfs.find(uri)
+cell = doc.find_cell("@id=install")
+content = file.read()
+```
 
-file.add_cell(
-    cell_type="heading",
-    content="安装",
-    attrs={"id": "install", "scope": "guide"},
-    level=2,
+## 直接导入 Store
+
+```python
+from openvfs import MemoryStore, OpenVfs
+
+store = MemoryStore()
+myvfs = OpenVfs.init_vfs(store=store)
+```
+
+可选后端示例：
+
+```python
+from openvfs import OpenVfs, S3Store
+
+store = S3Store(
+    bucket_name="my-bucket",
+    endpoint_url="https://tos-s3-cn-beijing.volces.com",
+    aws_access_key_id="your-ak",
+    aws_secret_access_key="your-sk",
 )
-file.add_cell(
-    cell_type="code",
-    content="pip install openvfs",
-    attrs={"id": "install_cmd", "scope": "guide"},
-    lang="bash",
-)
-
-cell = file.find_cell(id="install_cmd", scope="guide")
-print(cell.type, cell.content)
+myvfs = OpenVfs.init_vfs(store=store)
 ```
