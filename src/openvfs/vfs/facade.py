@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+import threading
+from typing import Any, Literal
 
+from openvfs.exceptions import NotFoundError
 from openvfs.stores import BaseStore, MemoryStore, adapt_store, create_default_store
 from openvfs.vfs.builder import DocumentBuilder
 from openvfs.vfs.config import load_config
 from openvfs.vfs.directory import VfsDirectory
-from openvfs.vfs.document import VfsDocument
+from openvfs.vfs.document import Cell
+from openvfs.vfs.file import VfsFile
 from openvfs.vfs.uri import ensure_md, is_file_uri, parse, to_object_key
 
 
@@ -23,6 +26,8 @@ class OpenVfs:
         cfg = load_config()
         self._store = adapt_store(store) if store is not None else create_default_store()
         self._namespaces = namespaces if namespaces is not None else cfg.get("namespaces")
+        self._key_locks: dict[str, threading.RLock] = {}
+        self._key_locks_guard = threading.Lock()
 
     @classmethod
     def init_vfs(
@@ -48,8 +53,12 @@ class OpenVfs:
     def mkdir(self, uri: str) -> None:
         self.create_folder(uri)
 
-    def document(self, uri: str) -> VfsDocument:
-        return VfsDocument(self, uri)
+    def find_file(self, path: str, must_exist: bool = True) -> VfsFile | None:
+        uri = self._as_file_uri(path)
+        file = VfsFile(self, uri)
+        if must_exist and not file.exists():
+            return None
+        return file
 
     def directory(self, uri: str) -> VfsDirectory:
         return VfsDirectory(self, uri)
@@ -64,20 +73,88 @@ class OpenVfs:
         _, full_path = parse(uri, self._namespaces)
         return full_path
 
+    def _get_key_lock(self, key: str) -> threading.RLock:
+        with self._key_locks_guard:
+            lock = self._key_locks.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                self._key_locks[key] = lock
+            return lock
+
+    def _decode_data(self, data: bytes) -> str:
+        return data.decode("utf-8")
+
+    def _read_file_unlocked(self, key: str, uri: str) -> str:
+        try:
+            return self._decode_data(self._store.get(key))
+        except NotFoundError as exc:
+            raise ValueError(f"文件不存在: {uri}") from exc
+
+    def _write_file_unlocked(self, key: str, content: str) -> None:
+        self._store.put(key, content)
+
+    def _mutate_file(
+        self,
+        uri: str,
+        mutator: Any,
+        *,
+        create_if_missing: bool = False,
+    ) -> str:
+        file_uri = self._as_file_uri(uri)
+        key = self._resolve_key(file_uri, for_file=True)
+        with self._get_key_lock(key):
+            exists = self._store.exists(key)
+            if not exists and not create_if_missing:
+                raise ValueError(f"文件不存在: {uri}")
+            current = self._decode_data(self._store.get(key)) if exists else ""
+            updated = mutator(current)
+            if not isinstance(updated, str):
+                raise TypeError("文件变更函数必须返回 str")
+            self._write_file_unlocked(key, updated)
+            return updated
+
+    def _as_file_uri(self, path: str) -> str:
+        raw = path.strip()
+        if not raw:
+            raise ValueError("文件路径不能为空")
+        if raw.startswith("openvfs://"):
+            return raw
+        normalized = raw.strip("/")
+        return f"openvfs://{normalized}"
+
     def create(self, uri: str, content: str) -> None:
-        self.document(uri).create(content)
+        file_uri = self._as_file_uri(uri)
+        key = self._resolve_key(file_uri, for_file=True)
+        with self._get_key_lock(key):
+            self._write_file_unlocked(key, content)
 
     def read(self, uri: str) -> str:
-        return self.document(uri).read()
+        file_uri = self._as_file_uri(uri)
+        key = self._resolve_key(file_uri, for_file=True)
+        with self._get_key_lock(key):
+            return self._read_file_unlocked(key, uri)
 
     def update(self, uri: str, content: str) -> None:
-        self.document(uri).write(content)
+        file_uri = self._as_file_uri(uri)
+        key = self._resolve_key(file_uri, for_file=True)
+        with self._get_key_lock(key):
+            if not self._store.exists(key):
+                raise ValueError(f"文件不存在: {uri}")
+            self._write_file_unlocked(key, content)
 
     def delete(self, uri: str) -> None:
-        self.document(uri).delete()
+        file_uri = self._as_file_uri(uri)
+        key = self._resolve_key(file_uri, for_file=True)
+        with self._get_key_lock(key):
+            if not self._store.exists(key):
+                raise ValueError(f"文件不存在: {uri}")
+            self._store.delete(key)
 
     def exists(self, uri: str) -> bool:
-        return self.document(uri).exists()
+        file_uri = self._as_file_uri(uri)
+        key = self._resolve_key(file_uri, for_file=True)
+        with self._get_key_lock(key):
+            return self._store.exists(key)
 
     def list(self, uri: str) -> list[str]:
         return self.directory(uri).list()
@@ -85,76 +162,48 @@ class OpenVfs:
     def tree(self, uri: str, max_depth: int = -1) -> str:
         return self.directory(uri).tree(max_depth=max_depth)
 
-    def add_heading(self, uri: str, text: str, level: int = 1, attrs: dict[str, str] | None = None) -> None:
-        self.document(uri).add_heading(text, level=level, attrs=attrs)
-
-    def add_heading_with_content(
+    def add_cell(
         self,
-        uri: str,
-        text: str,
-        section_content: str,
-        level: int = 1,
+        path: str,
+        title: str,
+        content: str,
+        level: int = 2,
         attrs: dict[str, str] | None = None,
-    ) -> None:
-        self.document(uri).add_heading_with_content(text, section_content, level=level, attrs=attrs)
+    ) -> Cell:
+        file = self.find_file(path, must_exist=False)
+        if file is None:
+            raise RuntimeError(f"无法创建文件对象: {path}")
+        md = file.as_markdown()
+        return md.add_cell(title=title, content=content, level=level, attrs=attrs, create_if_missing=True)
 
-    def append(self, uri: str, content: str) -> None:
-        self.document(uri).append(content)
+    def list_cell(self, path: str) -> list[Cell]:
+        file = self.find_file(path)
+        if file is None:
+            raise ValueError(f"文件不存在: {path}")
+        return file.as_markdown().list_cell()
 
-    def insert_under_heading(self, uri: str, heading_text: str, content: str) -> None:
-        self.document(uri).insert_under_heading(heading_text, content)
-
-    def replace_heading_content(self, uri: str, heading_text: str, new_content: str) -> None:
-        self.document(uri).replace_heading_content(heading_text, new_content)
-
-    def get_headings(self, uri: str) -> list[dict[str, Any]]:
-        return self.document(uri).get_headings()
-
-    def get_section(self, uri: str, heading_text: str) -> str:
-        return self.document(uri).get_section(heading_text)
-
-    def set_section_by_field(
+    def find_cell(
         self,
-        uri: str,
-        field: str,
-        value: str,
-        heading_text: str,
-        section_content: str,
-        level: int = 2,
-    ) -> None:
-        self.document(uri).set_section_by_field(field, value, heading_text, section_content, level=level)
+        path: str,
+        selector: str,
+        expect: Literal["one", "zero_or_one", "many"] = "one",
+    ) -> Cell | list[Cell] | None:
+        file = self.find_file(path)
+        if file is None:
+            raise ValueError(f"文件不存在: {path}")
+        return file.as_markdown().find_cell(selector, expect=expect)
 
-    def set_section_by_id(
+    def update_cell(
         self,
-        uri: str,
-        section_id: str,
-        heading_text: str,
-        section_content: str,
-        level: int = 2,
-    ) -> None:
-        self.document(uri).set_section_by_id(section_id, heading_text, section_content, level=level)
-
-    def get_section_by_field(self, uri: str, field: str, value: str) -> str:
-        return self.document(uri).get_section_by_field(field, value)
-
-    def get_section_by_id(self, uri: str, section_id: str) -> str:
-        return self.document(uri).get_section_by_id(section_id)
-
-    def get_section_by_ref(self, uri: str, ref: str | dict[str, str]) -> str:
-        return self.document(uri).get_section_by_ref(ref)
-
-    def get_heading_with_context(
-        self,
-        uri: str,
-        heading_ref: str | dict[str, str],
-        before: int = 0,
-        after: int = 0,
-        include_heading: bool = True,
-    ) -> str:
-        return self.document(uri).get_heading_with_context(heading_ref, before=before, after=after, include_heading=include_heading)
-
-    def list_sections_by_field(self, uri: str, field: str | None = None) -> list[dict[str, Any]]:
-        return self.document(uri).list_sections_by_field(field)
+        path: str,
+        selector: str,
+        content: str,
+        expect: Literal["one", "zero_or_one", "many"] = "one",
+    ) -> Cell | list[Cell] | None:
+        file = self.find_file(path)
+        if file is None:
+            raise ValueError(f"文件不存在: {path}")
+        return file.as_markdown().update_cell(selector=selector, content=content, expect=expect)
 
 
 OpenVFS = OpenVfs

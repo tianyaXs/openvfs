@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from openvfs.vfs.uri import SCHEME
 
@@ -116,48 +116,34 @@ class DocumentBuilder:
     def write(self, overwrite: bool = False) -> DocumentBuilder:
         uri = self._uri()
         body = self.build()
-        if overwrite or not self._client.exists(uri):
+        if overwrite:
             self._client.create(uri, body)
         else:
-            existing = self._client.read(uri)
-            self._client.update(uri, existing.rstrip() + "\n\n" + body)
+            self._client._mutate_file(
+                uri,
+                lambda existing: body if not existing else existing.rstrip() + "\n\n" + body,
+                create_if_missing=True,
+            )
         self._buffer = []
         return self
 
     def read(self) -> str:
         return self._client.read(self._uri())
 
-    def get_block(self, **attrs: str) -> str:
-        uri = self._uri()
-        if not attrs:
-            raise ValueError("至少指定一个属性，如 id=xxx")
-        if len(attrs) == 1 and "id" in attrs:
-            return self._client.get_section_by_id(uri, attrs["id"])
-        if len(attrs) == 1:
-            key, value = next(iter(attrs.items()))
-            return self._client.get_section_by_field(uri, key, value)
-        return self._client.get_section_by_ref(uri, attrs)
+    def find_cell(
+        self,
+        selector: str,
+        expect: Literal["one", "zero_or_one", "many"] = "one",
+    ) -> Any:
+        return self._client.find_cell(self._uri(), selector, expect=expect)
 
-    def list_blocks(self, field: str | None = None) -> list[dict[str, Any]]:
-        return self._client.list_sections_by_field(self._uri(), field)
+    def list_cell(self) -> list[Any]:
+        return self._client.list_cell(self._uri())
 
-    def get_by_hierarchy(self, *level_attrs: str) -> str:
-        uri = self._uri()
-        content = self._client.read(uri)
-        from openvfs.filetypes.md.parser import find_heading_by_field, get_headings
-
-        lines = content.split("\n")
-        scope_lines = lines
-        for level_spec in level_attrs:
-            if "=" not in level_spec:
-                continue
-            key, _, value = level_spec.strip().partition("=")
-            scope_content = "\n".join(scope_lines)
-            headings = get_headings(scope_content)
-            heading = find_heading_by_field(headings, key.strip(), value.strip())
-            if not heading:
-                raise ValueError(f"未找到 {key}={value}")
-            start_idx = heading.line_start
-            end_idx = (heading.line_end - 1) if heading.line_end else (len(scope_lines) - 1)
-            scope_lines = scope_lines[start_idx : end_idx + 1]
-        return "\n".join(scope_lines).rstrip()
+    def update_cell(
+        self,
+        selector: str,
+        content: str,
+        expect: Literal["one", "zero_or_one", "many"] = "one",
+    ) -> Any:
+        return self._client.update_cell(self._uri(), selector, content, expect=expect)

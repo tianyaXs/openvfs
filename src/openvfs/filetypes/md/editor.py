@@ -1,11 +1,15 @@
 """Markdown 格式编辑"""
 
+from typing import Any, Literal
+
 from openvfs.filetypes.md.parser import (
-    get_headings,
+    CellSelectorCondition,
     find_heading,
     find_heading_by_field,
     find_heading_by_id,
     find_heading_by_ref,
+    get_headings,
+    parse_cell_selector,
 )
 
 
@@ -243,3 +247,95 @@ def list_sections_by_field(content: str, field: str | None = None) -> list[dict]
                 }
             )
     return result
+
+
+def _cell_from_heading(content_lines: list[str], heading: Any) -> dict:
+    content_start = heading.line_start
+    content_end = heading.line_end if heading.line_end else len(content_lines)
+    body = "\n".join(content_lines[content_start:content_end]).rstrip()
+    return {
+        "title": heading.text,
+        "level": heading.level,
+        "attrs": dict(heading.attrs),
+        "content": body,
+        "line_start": heading.line_start,
+        "line_end": heading.line_end,
+    }
+
+
+def _match_cell_condition(heading: Any, condition: CellSelectorCondition) -> bool:
+    if condition.is_text:
+        return heading.text == condition.value
+    return heading.attrs.get(condition.field) == condition.value
+
+
+def list_cells(content: str) -> list[dict]:
+    headings = get_headings(content)
+    lines = content.split("\n")
+    return [_cell_from_heading(lines, heading) for heading in headings]
+
+
+def find_cells(content: str, selector: str) -> list[dict]:
+    conditions = parse_cell_selector(selector)
+    headings = get_headings(content)
+    lines = content.split("\n")
+
+    matched = [
+        heading
+        for heading in headings
+        if all(_match_cell_condition(heading, condition) for condition in conditions)
+    ]
+    return [_cell_from_heading(lines, heading) for heading in matched]
+
+
+def add_cell(
+    content: str,
+    title: str,
+    section_content: str,
+    level: int = 2,
+    attrs: dict[str, str] | None = None,
+) -> str:
+    return add_heading_with_content(content, title, section_content, level=level, attrs=attrs)
+
+
+def update_cells(
+    content: str,
+    selector: str,
+    section_content: str,
+    expect: Literal["one", "zero_or_one", "many"] = "one",
+) -> str:
+    conditions = parse_cell_selector(selector)
+    headings = get_headings(content)
+    matched = [
+        heading
+        for heading in headings
+        if all(_match_cell_condition(heading, condition) for condition in conditions)
+    ]
+
+    if expect == "one":
+        if not matched:
+            raise ValueError(f"update_cell 未命中: {selector}")
+        if len(matched) > 1:
+            raise ValueError(f"update_cell 预期 1 个结果，实际 {len(matched)} 个: {selector}")
+        targets = [matched[0]]
+    elif expect == "zero_or_one":
+        if len(matched) > 1:
+            raise ValueError(f"update_cell 预期最多 1 个结果，实际 {len(matched)} 个: {selector}")
+        targets = matched
+    else:
+        targets = matched
+
+    if not targets:
+        return content.rstrip("\n") + "\n"
+
+    lines = content.split("\n")
+    replacement = section_content.rstrip()
+    replacement_lines = [""] if not replacement else [""] + replacement.split("\n") + [""]
+
+    for heading in sorted(targets, key=lambda item: item.line_start, reverse=True):
+        title_idx = heading.line_start - 1
+        content_start = title_idx + 1
+        content_end = heading.line_end if heading.line_end else len(lines)
+        lines = lines[:content_start] + replacement_lines + lines[content_end:]
+
+    return "\n".join(lines).rstrip("\n") + "\n"

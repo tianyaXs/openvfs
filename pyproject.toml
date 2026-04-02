@@ -1,6 +1,6 @@
 [project]
 name = "openvfs"
-version = "0.1.4"
+version = "0.1.8"
 description = "Agent 专用 Markdown 虚拟文件系统"
 readme = "README.md"
 license = "MIT"
@@ -24,11 +24,6 @@ dependencies = [
     "py-key-value-aio[s3]>=0.4.4",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=9.0.2",
-    "pythest>=0.1.1",
-]
 
 [project.urls]
 Documentation = "https://github.com/tianyaXs/openvfs/blob/main/docs/USAGE.md"
@@ -38,6 +33,19 @@ Repository = "https://github.com/tianyaXs/openvfs.git"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+exclude = [
+    "**/__pycache__/**",
+    "**/*.py[cod]",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/openvfs"]
 
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "src/openvfs",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]

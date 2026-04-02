@@ -6,14 +6,16 @@ from typing import Any
 
 from openvfs.exceptions import InvalidURIError, MindMarkError, NotFoundError, StorageError
 from openvfs.stores import BaseStore, KeyValueStoreAdapter, MemoryStore, RedisStore, S3Store
-from openvfs.vfs import DocumentBuilder, OpenVFS, OpenVfs, VfsDirectory, VfsDocument
+from openvfs.vfs import Cell, DocumentBuilder, MarkdownDocument, OpenVFS, OpenVfs, VfsDirectory, VfsFile
 
 
 __all__ = [
     "OpenVfs",
     "OpenVFS",
     "DocumentBuilder",
-    "VfsDocument",
+    "VfsFile",
+    "MarkdownDocument",
+    "Cell",
     "VfsDirectory",
     "BaseStore",
     "KeyValueStoreAdapter",

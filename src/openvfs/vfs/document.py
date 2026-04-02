@@ -1,133 +1,121 @@
-"""虚拟文件系统中的文档对象。"""
-
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
-from openvfs.exceptions import NotFoundError
-from openvfs.filetypes.md.editor import (
-    add_heading as _add_heading,
-    add_heading_with_content as _add_heading_with_content,
-    append_content as _append_content,
-    get_heading_with_context as _get_heading_with_context,
-    get_section as _get_section,
-    get_section_by_field as _get_section_by_field,
-    get_section_by_id as _get_section_by_id,
-    get_section_by_ref as _get_section_by_ref,
-    insert_under_heading as _insert_under_heading,
-    list_sections_by_field as _list_sections_by_field,
-    replace_heading_content as _replace_heading_content,
-    set_section_by_field as _set_section_by_field,
-)
-from openvfs.filetypes.md.parser import get_headings as _get_headings
+from openvfs.filetypes.md.editor import add_cell as _add_cell
+from openvfs.filetypes.md.editor import find_cells as _find_cells
+from openvfs.filetypes.md.editor import list_cells as _list_cells
+from openvfs.filetypes.md.editor import update_cells as _update_cells
 
 if TYPE_CHECKING:
     from openvfs.vfs.facade import OpenVFS
 
 
-class VfsDocument:
-    """虚拟文件系统中的 Markdown 文档对象。"""
+@dataclass(frozen=True)
+class Cell:
+    title: str
+    level: int
+    attrs: dict[str, str]
+    content: str
+    line_start: int
+    line_end: int | None
 
+    def read(self) -> str:
+        return self.content
+
+
+class MarkdownDocument:
     def __init__(self, client: OpenVFS, uri: str) -> None:
         self._client = client
         self.uri = uri
 
-    def create(self, content: str) -> None:
-        key = self._client._resolve_key(self.uri, for_file=True)
-        self._client._store.put(key, content)
-
     def read(self) -> str:
-        key = self._client._resolve_key(self.uri, for_file=True)
-        try:
-            data = self._client._store.get(key)
-            return data.decode("utf-8")
-        except NotFoundError:
-            raise NotFoundError(self.uri)
+        return self._client.read(self.uri)
 
     def write(self, content: str) -> None:
-        key = self._client._resolve_key(self.uri, for_file=True)
-        self._client._store.put(key, content)
+        self._client.create(self.uri, content)
 
-    def delete(self) -> None:
-        key = self._client._resolve_key(self.uri, for_file=True)
-        self._client._store.delete(key)
+    def list_cell(self) -> list[Cell]:
+        return self._to_cells(_list_cells(self.read()))
 
-    def exists(self) -> bool:
-        key = self._client._resolve_key(self.uri, for_file=True)
-        return self._client._store.exists(key)
-
-    def add_heading(self, text: str, level: int = 1, attrs: dict[str, str] | None = None) -> None:
-        self.write(_add_heading(self.read(), text, level, attrs))
-
-    def add_heading_with_content(
+    def find_cell(
         self,
-        text: str,
-        section_content: str,
-        level: int = 1,
+        selector: str,
+        expect: Literal["one", "zero_or_one", "many"] = "one",
+    ) -> Cell | list[Cell] | None:
+        return self._resolve_cells(_find_cells(self.read(), selector), selector, expect, action="find_cell")
+
+    def add_cell(
+        self,
+        title: str,
+        content: str,
+        level: int = 2,
         attrs: dict[str, str] | None = None,
-    ) -> None:
-        self.write(_add_heading_with_content(self.read(), text, section_content, level, attrs))
+        create_if_missing: bool = False,
+    ) -> Cell:
+        updated = self._client._mutate_file(
+            self.uri,
+            lambda current: _add_cell(current, title, content, level=level, attrs=attrs),
+            create_if_missing=create_if_missing,
+        )
+        selector: str
+        if attrs and "id" in attrs:
+            selector = f"@id={self._selector_value(attrs['id'])}"
+        else:
+            selector = f"@text()={self._selector_value(title)}"
+        result = self._resolve_cells(_find_cells(updated, selector), selector, "one", action="add_cell")
+        if isinstance(result, Cell):
+            return result
+        raise RuntimeError("add_cell 返回类型异常")
 
-    def append(self, content: str) -> None:
-        self.write(_append_content(self.read(), content))
+    def update_cell(
+        self,
+        selector: str,
+        content: str,
+        expect: Literal["one", "zero_or_one", "many"] = "one",
+    ) -> Cell | list[Cell] | None:
+        updated = self._client._mutate_file(
+            self.uri,
+            lambda current: _update_cells(current, selector, content, expect=expect),
+            create_if_missing=False,
+        )
+        return self._resolve_cells(_find_cells(updated, selector), selector, expect, action="update_cell")
 
-    def insert_under_heading(self, heading_text: str, content: str) -> None:
-        self.write(_insert_under_heading(self.read(), heading_text, content))
-
-    def replace_heading_content(self, heading_text: str, new_content: str) -> None:
-        self.write(_replace_heading_content(self.read(), heading_text, new_content))
-
-    def get_headings(self) -> list[dict[str, Any]]:
-        headings = _get_headings(self.read())
+    def _to_cells(self, raw_cells: list[dict]) -> list[Cell]:
         return [
-            {
-                "level": heading.level,
-                "text": heading.text,
-                "line_start": heading.line_start,
-                "attrs": getattr(heading, "attrs", {}),
-            }
-            for heading in headings
+            Cell(
+                title=item["title"],
+                level=item["level"],
+                attrs=item["attrs"],
+                content=item["content"],
+                line_start=item["line_start"],
+                line_end=item["line_end"],
+            )
+            for item in raw_cells
         ]
 
-    def get_section(self, heading_text: str) -> str:
-        return _get_section(self.read(), heading_text)
-
-    def set_section_by_field(
+    def _resolve_cells(
         self,
-        field: str,
-        value: str,
-        heading_text: str,
-        section_content: str,
-        level: int = 2,
-    ) -> None:
-        self.write(_set_section_by_field(self.read(), field, value, heading_text, section_content, level))
+        raw_cells: list[dict],
+        selector: str,
+        expect: Literal["one", "zero_or_one", "many"],
+        action: str,
+    ) -> Cell | list[Cell] | None:
+        cells = self._to_cells(raw_cells)
+        if expect == "many":
+            return cells
+        if expect == "zero_or_one":
+            if len(cells) > 1:
+                raise ValueError(f"{action} 预期最多 1 个结果，实际 {len(cells)} 个: {selector}")
+            return cells[0] if cells else None
+        if not cells:
+            raise ValueError(f"{action} 未命中: {selector}")
+        if len(cells) > 1:
+            raise ValueError(f"{action} 预期 1 个结果，实际 {len(cells)} 个: {selector}")
+        return cells[0]
 
-    def set_section_by_id(
-        self,
-        section_id: str,
-        heading_text: str,
-        section_content: str,
-        level: int = 2,
-    ) -> None:
-        self.set_section_by_field("id", section_id, heading_text, section_content, level)
-
-    def get_section_by_field(self, field: str, value: str) -> str:
-        return _get_section_by_field(self.read(), field, value)
-
-    def get_section_by_id(self, section_id: str) -> str:
-        return _get_section_by_id(self.read(), section_id)
-
-    def get_section_by_ref(self, ref: str | dict[str, str]) -> str:
-        return _get_section_by_ref(self.read(), ref)
-
-    def get_heading_with_context(
-        self,
-        heading_ref: str | dict[str, str],
-        before: int = 0,
-        after: int = 0,
-        include_heading: bool = True,
-    ) -> str:
-        return _get_heading_with_context(self.read(), heading_ref, before, after, include_heading)
-
-    def list_sections_by_field(self, field: str | None = None) -> list[dict[str, Any]]:
-        return _list_sections_by_field(self.read(), field)
+    @staticmethod
+    def _selector_value(value: str) -> str:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'

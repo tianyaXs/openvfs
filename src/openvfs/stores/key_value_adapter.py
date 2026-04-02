@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import base64
+import threading
 from typing import Any
 
 from openvfs.exceptions import NotFoundError, StorageError
@@ -23,26 +24,35 @@ class KeyValueStoreAdapter(BaseStore):
         self.prefix = prefix.strip("/")
         self._prefix = f"{self.prefix}/" if self.prefix else ""
         self._loop = asyncio.new_event_loop()
+        self._loop_thread = threading.Thread(target=self._run_loop, name="openvfs-kv-loop", daemon=True)
+        self._loop_thread.start()
+        self._close_lock = threading.Lock()
         self._closed = False
         atexit.register(self.close)
 
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
     def _run(self, coroutine: Any) -> Any:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            if self._closed:
-                raise RuntimeError("KeyValueStoreAdapter 已关闭")
-            return self._loop.run_until_complete(coroutine)
-        raise RuntimeError("同步 OpenVFS 不能在已有事件循环中直接驱动异步 store，请后续改为异步入口")
+        if self._closed:
+            raise RuntimeError("KeyValueStoreAdapter 已关闭")
+        future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        return future.result()
 
     def close(self) -> None:
-        if self._closed:
-            return
-        close = getattr(self._kv_store, "close", None)
-        if close is not None:
-            self._loop.run_until_complete(close())
-        self._loop.close()
-        self._closed = True
+        with self._close_lock:
+            if self._closed:
+                return
+            close = getattr(self._kv_store, "close", None)
+            if close is not None:
+                maybe_coroutine = close()
+                if asyncio.iscoroutine(maybe_coroutine):
+                    self._run(maybe_coroutine)
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop_thread.join()
+            self._loop.close()
+            self._closed = True
 
     def _directory_record_key(self, path: str) -> str:
         normalized = path.rstrip("/")

@@ -120,3 +120,122 @@ def find_heading_by_ref(
             if all(h.attrs.get(k) == v for k, v in ref.items()):
                 return h
     return None
+
+
+@dataclass
+class CellSelectorCondition:
+    field: str
+    value: str
+    is_text: bool = False
+
+
+def _split_selector_clauses(body: str) -> list[str]:
+    clauses: list[str] = []
+    buf: list[str] = []
+    quote: str | None = None
+    escaped = False
+    i = 0
+
+    while i < len(body):
+        ch = body[i]
+        if escaped:
+            buf.append(ch)
+            escaped = False
+            i += 1
+            continue
+        if ch == "\\":
+            escaped = True
+            buf.append(ch)
+            i += 1
+            continue
+        if quote is not None:
+            if ch == quote:
+                quote = None
+            buf.append(ch)
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if body[i : i + 2] == "@@":
+            clause = "".join(buf).strip()
+            if clause:
+                clauses.append(clause)
+            buf = []
+            i += 2
+            continue
+        buf.append(ch)
+        i += 1
+
+    last_clause = "".join(buf).strip()
+    if last_clause:
+        clauses.append(last_clause)
+    return clauses
+
+
+def _split_unescaped_equal(clause: str) -> tuple[str, str]:
+    quote: str | None = None
+    escaped = False
+    for i, ch in enumerate(clause):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if quote is not None:
+            if ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            continue
+        if ch == "=":
+            return clause[:i].strip(), clause[i + 1 :].strip()
+    raise ValueError(f"无效 cell 选择器子句，缺少 '=': {clause}")
+
+
+def _unquote(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        inner = value[1:-1]
+        return bytes(inner, "utf-8").decode("unicode_escape")
+    if "@@" in value:
+        raise ValueError("未加引号的值不能包含 '@@'，请使用引号包裹")
+    return value.replace("\\@", "@").replace("\\=", "=").replace("\\\\", "\\")
+
+
+def parse_cell_selector(selector: str) -> list[CellSelectorCondition]:
+    source = selector.strip()
+    if not source:
+        raise ValueError("cell 选择器不能为空")
+
+    if source.startswith("@@"):
+        body = source[2:]
+    elif source.startswith("@"):
+        body = source[1:]
+    else:
+        raise ValueError("cell 选择器必须以 '@' 或 '@@' 开头")
+
+    clauses = _split_selector_clauses(body)
+    if not clauses:
+        raise ValueError("cell 选择器没有有效子句")
+
+    conditions: list[CellSelectorCondition] = []
+    for clause in clauses:
+        field_raw, value_raw = _split_unescaped_equal(clause)
+        field_raw = field_raw.strip()
+        is_text = field_raw.endswith("()")
+        field = field_raw[:-2].strip() if is_text else field_raw
+        if not field:
+            raise ValueError(f"无效 cell 选择器字段: {field_raw}")
+        conditions.append(
+            CellSelectorCondition(
+                field=field,
+                value=_unquote(value_raw),
+                is_text=is_text,
+            )
+        )
+    return conditions
